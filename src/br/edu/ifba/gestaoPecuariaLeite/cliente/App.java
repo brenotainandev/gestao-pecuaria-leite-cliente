@@ -1,4 +1,4 @@
-package br.edu.ifba.gestao_pecuaria_leite.cliente;
+package br.edu.ifba.gestaoPecuariaLeite.cliente;
 
 public class App {
     public static void main(String[] args) {
