@@ -18,87 +18,127 @@ import java.util.Queue;
 
 public class ClienteImpl implements Cliente<Vaca, Leite>, Runnable {
 
-    private static final int TOTAL_DE_LEITURAS = 1;
+    private static final int TOTAL_DE_LEITURAS = 100;
+    private static final int PRODUCAO_FORA_DA_MEDIA = 0;
+    private static final int PRODUCAO_DENTRO_DA_MEDIA = 1;
 
     private static final String URL_SERVIDOR = "http://localhost:8080/";
     private static final String URL_ENVIAR_LEITE = URL_SERVIDOR + "gestao-leite/ordenha/";
 
     private static final int LIMIAR_OSCILACAO_DE_PRODUCAO_DE_LEITE = 5;
-    private static final int PRODUCAO_MEDIA = 20;
 
     private static final int TAMANHO_MAXIMO_HISTORICO = 30;
 
     private Vaca monitorado = null;
     private Sensoriamento<Leite> sensoriamento = null;
+    private int mediaIdealProducao;
 
-    private Queue<Leite> historicoDeLeituras = new LinkedList<>();
-    private Leite ultimaLeitura = new Leite(0);
+    private final Queue<Leite> historicoDeLeituras = new LinkedList<>();
 
     @Override
-    public void configurar(Vaca vaca, Sensoriamento<Leite> sensoriamento, List<Leite> padrao) {
+    public void configurar(Vaca vaca, Sensoriamento<Leite> sensoriamento, int mediaIdealProducao) {
         this.monitorado = vaca;
         this.sensoriamento = sensoriamento;
+        this.mediaIdealProducao = mediaIdealProducao;
     }
 
+    /**
+     * Detecta se a vaca está com produção de leite abaixo da média.
+     * Baseado no histórico de leituras.
+     *
+     * Complexidade: O(N), onde N é o número de leituras no histórico.
+     * O método percorre todas as leituras armazenadas no histórico.
+     *
+     * @return 0 se a produção está fora da média, 1 caso contrário.
+     */
     @Override
     public int detectarVacaProducaoBaixa() {
-        int totalDeDeteccoes = 0;
-        List<Leite> historico = new ArrayList<>(historicoDeLeituras);
-        for (Leite leitura : historico) {
-            if (leitura.getQuantidade() < PRODUCAO_MEDIA) {
-                totalDeDeteccoes++;
+        int producaoAcimaMedia = 0;
+        int producaoAbaixoMedia = 0;
+
+        for (Leite leitura : historicoDeLeituras) {
+            if (leitura.getQuantidade() > mediaIdealProducao) {
+                producaoAcimaMedia++;
+            } else {
+                producaoAbaixoMedia++;
             }
         }
-        return totalDeDeteccoes;
+
+        return producaoAbaixoMedia > producaoAcimaMedia ? PRODUCAO_FORA_DA_MEDIA : PRODUCAO_DENTRO_DA_MEDIA;
     }
 
+    /**
+     * Envia uma leitura de produção de leite ao servidor.
+     *
+     * Complexidade: O(1) para montar a URL e enviar os dados,
+     * mas pode variar dependendo do tempo de resposta do servidor.
+     *
+     * @param leite Dados da leitura de leite.
+     * @return Resposta do servidor.
+     * @throws Exception Caso ocorra erro de comunicação.
+     */
     @Override
     public String enviar(Leite leite) throws Exception {
         int producaoBaixa = detectarVacaProducaoBaixa();
 
-        URL url = new URL(URL_ENVIAR_LEITE + monitorado.getId() + "/" + URLEncoder.encode(monitorado.getNome(), StandardCharsets.UTF_8.toString()) + "/"
-                + leite.getQuantidade() + "/" + producaoBaixa);
+        // Monta a URL para envio.
+        String urlString = URL_ENVIAR_LEITE +
+                monitorado.getId() + "/" +
+                URLEncoder.encode(monitorado.getNome(), StandardCharsets.UTF_8) + "/" +
+                leite.getQuantidade() + "/" +
+                producaoBaixa;
 
-        System.out.println("enviando leitura de leite para o servidor: " + url);
+        System.out.println("Enviando leitura de leite para o servidor: " + urlString);
+
+        URL url = new URL(urlString);
         HttpURLConnection conexao = (HttpURLConnection) url.openConnection();
         conexao.setRequestMethod("GET");
+
         if (conexao.getResponseCode() != 200) {
-            throw new Exception("servidor de gestão de pecuária de leite indisponível");
+            throw new Exception("Servidor de gestão de pecuária de leite indisponível");
         }
 
-        InputStreamReader in = new InputStreamReader(conexao.getInputStream());
-        BufferedReader br = new BufferedReader(in);
-        String resposta = br.readLine();
-
-        conexao.disconnect();
-
-        return resposta;
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(conexao.getInputStream()))) {
+            return br.readLine();
+        } finally {
+            conexao.disconnect();
+        }
     }
 
+    /**
+     * Executa o processo de sensoriamento e envio das leituras de leite.
+     *
+     * Complexidade: O(N), onde N é o número de leituras geradas pelo sensoriamento.
+     * Cada leitura é processada uma vez, e o histórico é atualizado com O(1).
+     */
     @Override
     public void run() {
         List<Leite> leituras = sensoriamento.gerar(TOTAL_DE_LEITURAS);
         List<Leite> leiturasParaEnviar = new ArrayList<>();
 
+        // Processa cada leitura gerada pelo sensoriamento.
         for (Leite leitura : leituras) {
             if (Math.abs(leitura.getQuantidade()) > LIMIAR_OSCILACAO_DE_PRODUCAO_DE_LEITE) {
-                ultimaLeitura = leitura;
-                historicoDeLeituras.add(ultimaLeitura);
+                historicoDeLeituras.add(leitura);
+
+                // Garante que o histórico não ultrapasse o tamanho máximo.
                 if (historicoDeLeituras.size() > TAMANHO_MAXIMO_HISTORICO) {
-                    historicoDeLeituras.remove();
+                    historicoDeLeituras.poll(); // O(1) para remover o elemento mais antigo.
                 }
+
                 leiturasParaEnviar.add(leitura);
             } else {
-                System.out.println("leitura ignorada, não ocorreu oscilação significativa");
+                System.out.println("Leitura ignorada: oscilação insignificante.");
             }
         }
 
-        // Enviar todas as leituras acumuladas ao final da ordenha
+        // Envia todas as leituras acumuladas.
         for (Leite leitura : leiturasParaEnviar) {
             try {
                 String resposta = enviar(leitura);
-                System.out.println(resposta.equals("ok") ? "leitura enviada com sucesso" : "falha ao enviar leitura");
+                System.out.println("Leitura enviada: " + resposta);
             } catch (Exception e) {
+                System.err.println("Erro ao enviar leitura: " + e.getMessage());
                 e.printStackTrace();
             }
         }
