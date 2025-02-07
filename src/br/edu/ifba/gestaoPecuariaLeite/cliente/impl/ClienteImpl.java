@@ -5,16 +5,29 @@ import br.edu.ifba.gestaoPecuariaLeite.cliente.modelo.Leite;
 import br.edu.ifba.gestaoPecuariaLeite.cliente.modelo.Vaca;
 import br.edu.ifba.gestaoPecuariaLeite.cliente.sensoriamento.Sensoriamento;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
+import java.security.InvalidKeyException;
+import java.security.KeyFactory;
+import java.security.NoSuchAlgorithmException;
+import java.security.PublicKey;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
+import java.util.HashMap;
+
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class ClienteImpl implements Cliente<Vaca, Leite>, Runnable {
 
@@ -29,11 +42,37 @@ public class ClienteImpl implements Cliente<Vaca, Leite>, Runnable {
 
     private static final int TAMANHO_MAXIMO_HISTORICO = 30;
 
+    private static final String ALGORITMO_DE_ENCRIPTACAO = "RSA";
+    private static final String CAMINHO_CHAVE_PUBLICA = "/home/breno/projects/complexidade_de_dlgoritmos/gestao-pecuaria-leite-cliente/chave/publica.chv";
+
     private Vaca monitorado = null;
     private Sensoriamento<Leite> sensoriamento = null;
     private int mediaIdealProducao;
 
     private final Queue<Leite> historicoDeLeituras = new LinkedList<>();
+    private PublicKey chave = null;
+
+    public ClienteImpl() throws NoSuchAlgorithmException, InvalidKeySpecException, IOException {
+        this.chave = getChavePublica();
+    }
+
+    private PublicKey getChavePublica() throws IOException, NoSuchAlgorithmException, InvalidKeySpecException {
+        File arquivo = new File(CAMINHO_CHAVE_PUBLICA);
+        FileInputStream stream = new FileInputStream(arquivo);
+        byte[] bytes = stream.readAllBytes();
+        stream.close();
+
+        X509EncodedKeySpec spec = new X509EncodedKeySpec(bytes);
+        KeyFactory kf = KeyFactory.getInstance(ALGORITMO_DE_ENCRIPTACAO);
+        return kf.generatePublic(spec);
+    }
+
+    private byte[] encriptar(String json) throws NoSuchAlgorithmException, NoSuchPaddingException,
+            InvalidKeyException, IOException, IllegalBlockSizeException, BadPaddingException {
+        Cipher cipher = Cipher.getInstance(ALGORITMO_DE_ENCRIPTACAO);
+        cipher.init(Cipher.ENCRYPT_MODE, chave);
+        return cipher.doFinal(json.getBytes());
+    }
 
     @Override
     public void configurar(Vaca vaca, Sensoriamento<Leite> sensoriamento, int mediaIdealProducao) {
@@ -81,12 +120,17 @@ public class ClienteImpl implements Cliente<Vaca, Leite>, Runnable {
     public String enviar(Leite leite) throws Exception {
         int producaoBaixa = detectarVacaProducaoBaixa();
 
-        // Monta a URL para envio.
-        String urlString = URL_ENVIAR_LEITE +
-                monitorado.getId() + "/" +
-                URLEncoder.encode(monitorado.getNome(), StandardCharsets.UTF_8) + "/" +
-                leite.getQuantidade() + "/" +
-                producaoBaixa;
+        Map<String, String> json = new HashMap<>();
+        json.put("id", monitorado.getId());
+        json.put("nome", monitorado.getNome());
+        json.put("quantidade", String.valueOf(leite.getQuantidade()));
+        json.put("producaoBaixa", String.valueOf(producaoBaixa));
+
+        ObjectMapper mapeador = new ObjectMapper();
+        String jsonString = mapeador.writeValueAsString(json);
+        byte[] encriptado = encriptar(jsonString);
+
+        String urlString = URL_ENVIAR_LEITE + Base64.getUrlEncoder().encodeToString(encriptado);
 
         System.out.println("Enviando leitura de leite para o servidor: " + urlString);
 
