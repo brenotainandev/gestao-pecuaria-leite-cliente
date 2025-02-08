@@ -109,8 +109,7 @@ public class ClienteImpl implements Cliente<Vaca, Leite>, Runnable {
     /**
      * Envia uma leitura de produção de leite ao servidor.
      *
-     * Complexidade: O(1) para montar a URL e enviar os dados,
-     * mas pode variar dependendo do tempo de resposta do servidor.
+     * Complexidade: O(N), onde N é o tamanho da string JSON encriptada.
      *
      * @param leite Dados da leitura de leite.
      * @return Resposta do servidor.
